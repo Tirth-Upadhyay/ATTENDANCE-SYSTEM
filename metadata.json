@@ -1,0 +1,8 @@
+{
+  "name": "Copy of Copy of BCS MEDIA TEAM",
+  "description": "A comprehensive team attendance, real-time location tracking, and equipment management system for BCS Media event organizers.",
+  "requestFramePermissions": [
+    "geolocation",
+    "camera"
+  ]
+}

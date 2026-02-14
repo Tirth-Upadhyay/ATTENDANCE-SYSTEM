@@ -1,11 +1,40 @@
-<div align="center">
+# BCS MEDIA TEAM - Professional Deployment Guide
 
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
+This project is now a standard Vite + React + TypeScript application.
 
-  <h1>Built with AI Studio</h2>
+## 🚀 Local Development
 
-  <p>The fastest path from prompt to production with Gemini.</p>
+1. **Install Dependencies**:
+   ```bash
+   npm install
+   ```
 
-  <a href="https://aistudio.google.com/apps">Start building</a>
+2. **Set Environment Variables**:
+   Create a `.env` file or export your key:
+   ```bash
+   export API_KEY=your_gemini_api_key
+   ```
 
-</div>
+3. **Start Development Server**:
+   ```bash
+   npm run dev
+   ```
+
+## 🏗️ Production Build
+
+To build the project for production:
+```bash
+npm run build
+```
+The output will be in the `dist/` folder.
+
+## 🚀 Hosting (Vercel / Netlify)
+
+1. **Framework Preset**: Select **Vite**.
+2. **Build Command**: `npm run build`
+3. **Output Directory**: `dist`
+4. **Environment Variables**: Add `API_KEY` with your Google Gemini key.
+
+## 🛡️ Important Notes
+- **HTTPS**: Deployment **must** be via HTTPS for Geolocation and Camera features to work.
+- **Permissions**: Ensure users "Allow" location and camera access when prompted.
