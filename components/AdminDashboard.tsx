@@ -1,4 +1,3 @@
-
 import React, { useState } from 'react';
 import { User, Equipment, ChatMessage, WorkUpdate, Role } from '../types';
 import MapTracker from './MapTracker';
@@ -34,14 +33,11 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const members = users.filter(u => u.role === Role.MEMBER);
   const sessionKey = `D${selectedDay}S${selectedSession}`;
 
-  // REQUIREMENT: Show all verified (Present + Online) members across all departments
-  const activeMembersOnMap = members.filter(m => 
-    m.attendance.includes(sessionKey) &&
-    m.status === 'Online' && 
-    m.currentLocation
-  );
-
-  const geofenceViolations = activeMembersOnMap.filter(m => m.currentLocation && !m.isInsideGeofence);
+  // REQUIREMENT: Show members on the map if they have location data.
+  // We distinguish "Verified" (Present) members on the map UI itself.
+  const membersOnMap = members.filter(m => m.currentLocation);
+  const verifiedOnline = membersOnMap.filter(m => m.attendance.includes(sessionKey));
+  const geofenceViolations = membersOnMap.filter(m => m.currentLocation && !m.isInsideGeofence);
 
   return (
     <div className="flex flex-col h-screen lg:flex-row bg-slate-950 text-slate-200 overflow-hidden">
@@ -88,7 +84,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
           {[
             { id: 'map', label: 'Tactical Map', icon: 'M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7' },
             { id: 'sheet', label: 'Data Registry', icon: 'M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z' },
-            { id: 'inventory', label: 'Gear Inventory', icon: 'M3 7v10a2 2 0 002 2h14a2 2 0 002-2V7a2 2 0 00-2-2h-5l-1-1H7L6 5H5a2 2 0 00-2 2z' },
+            { id: 'inventory', label: 'Gear Inventory', icon: 'M3 7v10a2 2 0 002 2h14a2 2 0 002-2V7a2 2 0 00-2-2h-5l-1-1H7L6 5H5a2 2 0 00-2 2v7a2 2 0 002 2z' },
             { id: 'chat', label: 'Comms Channel', icon: 'M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z' },
           ].map(tab => (
             <button
@@ -110,8 +106,8 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
            <h4 className="text-[9px] font-black text-slate-500 uppercase mb-3 tracking-widest">Sector Health</h4>
            <div className="space-y-3">
               <div className="flex justify-between items-center text-[10px]">
-                <span className="text-slate-500">Active Map Units</span>
-                <span className="text-emerald-500 font-mono">{activeMembersOnMap.length}</span>
+                <span className="text-slate-500">Tracked Units</span>
+                <span className="text-emerald-500 font-mono">{membersOnMap.length}</span>
               </div>
               <div className="flex justify-between items-center text-[10px]">
                 <span className="text-slate-500">Breaches</span>
@@ -129,13 +125,13 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
             <h2 className="text-xl font-black text-white uppercase tracking-tight">
               {activeTab === 'map' ? 'Tactical Overlay' : activeTab.replace('-', ' ')}
             </h2>
-            <p className="text-[9px] text-slate-500 font-mono tracking-widest uppercase">Node: D{selectedDay}S{selectedSession} // VIEW_ACTIVE</p>
+            <p className="text-[9px] text-slate-500 font-mono tracking-widest uppercase">Node: D{selectedDay}S{selectedSession} // MONITORING</p>
           </div>
           
           <div className="flex items-center gap-6">
              <div className="flex flex-col items-end">
-                <span className="text-[10px] font-bold text-slate-500 uppercase tracking-tighter">Verified Units Online</span>
-                <span className="text-xl font-black text-indigo-500">{activeMembersOnMap.length} <span className="text-slate-700 font-normal">/ {members.length}</span></span>
+                <span className="text-[10px] font-bold text-slate-500 uppercase tracking-tighter">Verified Present (S{selectedSession})</span>
+                <span className="text-xl font-black text-indigo-500">{verifiedOnline.length} <span className="text-slate-700 font-normal">/ {members.length}</span></span>
              </div>
              <div className="w-10 h-10 rounded-full border-2 border-slate-700 p-0.5 bg-slate-800">
                 <img src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${adminId}`} className="w-full h-full rounded-full" alt="Admin" />
@@ -146,7 +142,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
         <div className="flex-1 relative overflow-hidden">
           {activeTab === 'map' && (
             <div className="absolute inset-0 w-full h-full">
-              <MapTracker members={activeMembersOnMap} />
+              <MapTracker members={membersOnMap} activeSessionKey={sessionKey} />
             </div>
           )}
           
