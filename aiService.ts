@@ -20,9 +20,8 @@ export const verifyAttendanceImage = async (base64Image: string): Promise<Verifi
   const ai = new GoogleGenAI({ apiKey });
 
   try {
-    // Switching to gemini-2.5-flash for stable production vision tasks
     const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
+      model: 'gemini-3-flash-preview',
       contents: {
         parts: [
           {
@@ -32,11 +31,11 @@ export const verifyAttendanceImage = async (base64Image: string): Promise<Verifi
             },
           },
           {
-            text: `Act as a high-precision GPS verification unit for MIT-WPU Kothrud.
+            text: `Act as a high-precision GPS verification unit for MIT-WPU Kothrud campus.
             Analyze the provided image for:
-            1. GPS Coordinates: Extract numerical Latitude and Longitude from text overlays.
-            2. Authenticity: Confirm this is a real camera capture, not a screen photo or screenshot.
-            3. Context: Confirm the environment looks like a university campus.
+            1. GPS Coordinates: Extract numerical Latitude and Longitude from text overlays or EXIF-style data printed on the image.
+            2. Authenticity: Confirm this is a real photo of people/campus, not a photo of another screen or a digital screenshot.
+            3. Context: Confirm the environment looks like a university campus setting.
             
             Return ONLY a valid JSON object. No markdown, no commentary.`
           }
@@ -60,7 +59,7 @@ export const verifyAttendanceImage = async (base64Image: string): Promise<Verifi
     });
 
     const text = response.text;
-    if (!text) throw new Error("Empty response from Gemini API.");
+    if (!text) throw new Error("Empty response from AI service.");
     
     // Safety: Strip markdown if the model accidentally includes it
     const cleanJson = text.replace(/```json|```/gi, "").trim();

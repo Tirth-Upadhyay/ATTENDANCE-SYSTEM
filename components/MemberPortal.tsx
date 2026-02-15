@@ -120,19 +120,19 @@ const MemberPortal: React.FC<MemberPortalProps> = ({
         if (result.error) {
           setAttendanceError(result.error);
         } else if (!result.isAuthentic) {
-          setAttendanceError("AUTH_ERROR: Digital manipulation detected.");
+          setAttendanceError("AUTH_ERROR: Digital manipulation or non-live photo detected.");
         } else if (result.latitude === null || result.longitude === null) {
-          setAttendanceError("GPS_ERROR: No readable geo-tag found in image overlay.");
+          setAttendanceError("GPS_ERROR: No valid coordinates found in image data.");
         } else {
           const inCampus = isWithinCampus(result.latitude, result.longitude);
           if (inCampus) {
             onMarkAttendance(selectedDay, selectedSession);
           } else {
-            setAttendanceError(`LOCATION_DENIED: Coordinates (${result.latitude}, ${result.longitude}) are outside MIT-WPU.`);
+            setAttendanceError(`LOCATION_DENIED: Coordinates (${result.latitude.toFixed(4)}, ${result.longitude.toFixed(4)}) are outside MIT-WPU.`);
           }
         }
       } catch (err: any) {
-        setAttendanceError(`FAULT: ${err.message || 'Verification system down.'}`);
+        setAttendanceError(`SYSTEM_FAULT: ${err.message || 'AI Analysis Failure.'}`);
       } finally {
         setIsVerifying(false);
       }
@@ -194,8 +194,7 @@ const MemberPortal: React.FC<MemberPortalProps> = ({
                       {[1, 2, 3].map(d => (
                         <button 
                           key={d} 
-                          onClick={() => setSelectedDay(d)}
-                          disabled={isSessionMarked}
+                          onClick={() => { setSelectedDay(d); setAttendanceError(null); }}
                           className={`flex-1 py-3 rounded-xl font-black text-[10px] border transition-all ${selectedDay === d ? `bg-${config.color}-600 border-${config.color}-500 text-white shadow-lg` : 'bg-slate-800 border-slate-700 text-slate-500'}`}
                         >
                           DAY {d}
@@ -209,8 +208,7 @@ const MemberPortal: React.FC<MemberPortalProps> = ({
                       {[1, 2, 3, 4].map(s => (
                         <button 
                           key={s} 
-                          onClick={() => setSelectedSession(s)}
-                          disabled={isSessionMarked}
+                          onClick={() => { setSelectedSession(s); setAttendanceError(null); }}
                           className={`flex-1 py-3 rounded-xl font-black text-[10px] border transition-all ${selectedSession === s ? `bg-white border-white text-slate-900` : 'bg-slate-800 border-slate-700 text-slate-500'}`}
                         >
                           S{s}
@@ -223,7 +221,13 @@ const MemberPortal: React.FC<MemberPortalProps> = ({
 
               {!isSessionMarked ? (
                 <div className="space-y-5">
-                  <input type="file" accept="image/*" ref={fileInputRef} className="hidden" onChange={handleFileChange} />
+                  <input 
+                    type="file" 
+                    accept="image/*" 
+                    ref={fileInputRef} 
+                    className="hidden" 
+                    onChange={handleFileChange} 
+                  />
                   <button
                     onClick={() => fileInputRef.current?.click()}
                     disabled={isVerifying}
@@ -257,13 +261,13 @@ const MemberPortal: React.FC<MemberPortalProps> = ({
             <div className="w-full md:w-72 aspect-square bg-slate-950 rounded-3xl border border-slate-800 overflow-hidden flex items-center justify-center relative group">
               {attendanceImage ? (
                 <>
-                  <img src={attendanceImage} className="w-full h-full object-cover" alt="Verified" />
+                  <img src={attendanceImage} className="w-full h-full object-cover" alt="Verification Source" />
                   <div className="absolute inset-0 bg-indigo-500/10 pointer-events-none mix-blend-overlay"></div>
                 </>
               ) : (
                 <div className="text-center space-y-4 opacity-10 group-hover:opacity-20 transition-opacity">
                   <svg className="w-20 h-20 mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"/><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
-                  <p className="text-[10px] font-black uppercase tracking-[0.5em]">Awaiting Uplink</p>
+                  <p className="text-[10px] font-black uppercase tracking-[0.5em]">Awaiting Data</p>
                 </div>
               )}
             </div>
