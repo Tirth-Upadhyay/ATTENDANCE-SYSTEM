@@ -1,3 +1,4 @@
+
 import { GoogleGenAI, Type } from "@google/genai";
 
 export interface VerificationResult {
@@ -11,13 +12,12 @@ export interface VerificationResult {
 }
 
 export const verifyAttendanceImage = async (base64Image: string): Promise<VerificationResult> => {
-  const apiKey = process.env.API_KEY;
-  
-  if (!apiKey || apiKey === "undefined") {
+  if (!process.env.API_KEY || process.env.API_KEY === "undefined") {
     throw new Error("API_KEY_MISSING: Please add the API_KEY to your deployment environment variables.");
   }
 
-  const ai = new GoogleGenAI({ apiKey });
+  // FIX: Always use new GoogleGenAI({apiKey: process.env.API_KEY});
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
   try {
     const response = await ai.models.generateContent({
@@ -58,6 +58,7 @@ export const verifyAttendanceImage = async (base64Image: string): Promise<Verifi
       },
     });
 
+    // FIX: Access response.text directly (property, not a method)
     const text = response.text;
     if (!text) throw new Error("Empty response from AI service.");
     
