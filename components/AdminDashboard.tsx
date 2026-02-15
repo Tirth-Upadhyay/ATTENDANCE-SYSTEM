@@ -20,26 +20,31 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
   users, equipments, messages, workUpdates,
   onUpdateEquipment, onRegisterEquipment, onSendMessage, adminId
 }) => {
-  const [activeTab, setActiveTab] = useState<'map' | 'sheet' | 'inventory' | 'chat'>('map');
+  const [activeTab, setActiveTab] = useState<'map' | 'sheet' | 'inventory' | 'chat'>('sheet');
   const [selectedDay, setSelectedDay] = useState(1);
   const [selectedSession, setSelectedSession] = useState(1);
 
   const sessionKey = `D${selectedDay}S${selectedSession}`;
-  const members = useMemo(() => users.filter(u => u.role === Role.MEMBER), [users]);
   
-  const onlineCount = useMemo(() => members.filter(m => m.status === 'Online').length, [members]);
-  const verifiedCount = useMemo(() => members.filter(m => m.attendance.includes(sessionKey)).length, [members, sessionKey]);
+  // REACTIVE AGGREGATION
+  const stats = useMemo(() => {
+    const members = users.filter(u => u.role === Role.MEMBER);
+    return {
+      members,
+      online: members.filter(m => m.status === 'Online').length,
+      verified: members.filter(m => m.attendance.includes(sessionKey)).length
+    };
+  }, [users, sessionKey]);
 
   return (
     <div className="flex flex-col h-full lg:flex-row overflow-hidden bg-slate-950">
-      {/* SIDEBAR NAVIGATION */}
-      <aside className="w-full lg:w-72 bg-slate-900 border-r border-slate-800 p-6 flex-shrink-0 flex flex-col shadow-2xl z-20">
+      <aside className="w-full lg:w-72 bg-slate-900 border-r border-slate-800 p-6 flex flex-col shadow-2xl z-20">
         <div className="mb-10">
           <div className="flex items-center gap-2 mb-1">
              <div className="w-3 h-3 bg-indigo-500 rounded-sm rotate-45"></div>
              <h1 className="text-xl font-black text-white tracking-tighter uppercase">BCS MEDIA</h1>
           </div>
-          <p className="text-[9px] text-slate-500 font-black uppercase tracking-[0.3em]">COMMAND CENTER V15</p>
+          <p className="text-[9px] text-slate-500 font-black uppercase tracking-[0.3em]">HQ COMMAND V19</p>
         </div>
 
         <nav className="space-y-3 flex-1">
@@ -66,62 +71,52 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
           ))}
         </nav>
 
-        <div className="mt-auto p-5 bg-slate-950 rounded-[2rem] border border-slate-800 space-y-4">
-          <div className="flex flex-col">
-            <span className="text-[8px] font-black text-slate-600 uppercase tracking-widest mb-1">Sector Health</span>
+        <div className="mt-auto p-5 bg-slate-950 rounded-[2rem] border border-slate-800">
+            <span className="text-[8px] font-black text-slate-600 uppercase tracking-widest mb-1 block">Sector Signal</span>
             <div className="flex justify-between items-end">
-              <span className="text-[10px] text-slate-400 font-bold">Active Units</span>
-              <span className="text-emerald-500 font-black text-sm">{onlineCount}</span>
+              <span className="text-[10px] text-slate-400 font-bold">Live Units</span>
+              <span className="text-emerald-500 font-black text-sm">{stats.online}</span>
             </div>
             <div className="w-full h-1 bg-slate-800 rounded-full mt-2 overflow-hidden">
-               <div className="h-full bg-emerald-500 transition-all duration-1000" style={{ width: `${(onlineCount / members.length) * 100}%` }}></div>
+               <div className="h-full bg-emerald-500 transition-all duration-500" style={{ width: `${(stats.online / stats.members.length) * 100}%` }}></div>
             </div>
-          </div>
         </div>
       </aside>
 
-      {/* MAIN CONTENT AREA */}
       <section className="flex-1 relative flex flex-col overflow-hidden">
-        {/* TACTICAL HEADER */}
-        <div className="h-20 bg-slate-900/40 border-b border-slate-800 flex items-center justify-between px-10 backdrop-blur-3xl z-10">
+        <div className="h-24 bg-slate-900/40 border-b border-slate-800 flex items-center justify-between px-10 backdrop-blur-3xl z-10">
            <div>
-             <h2 className="text-xl font-black text-white uppercase tracking-tighter">Tactical Overlay</h2>
-             <p className="text-[9px] text-slate-500 font-mono font-bold uppercase">Node: D{selectedDay}S{selectedSession} // View_Active</p>
+             <h2 className="text-xl font-black text-white uppercase tracking-tighter">Live Operations</h2>
+             <p className="text-[9px] text-slate-500 font-mono font-bold uppercase tracking-widest">Target: D{selectedDay}-S{selectedSession} // View_Master</p>
            </div>
            
            <div className="flex items-center gap-8">
-              <div className="flex items-center gap-3">
-                 <span className="text-[9px] font-black text-slate-500 uppercase tracking-widest">Active View Day</span>
-                 <div className="flex bg-slate-950 p-1 rounded-xl border border-slate-800">
-                   {[1,2,3].map(d => (
-                     <button key={d} onClick={() => setSelectedDay(d)} className={`px-4 py-2 rounded-lg text-[10px] font-black transition-all ${selectedDay === d ? 'bg-indigo-600 text-white shadow-lg' : 'text-slate-600 hover:text-white'}`}>D{d}</button>
-                   ))}
-                 </div>
+              <div className="flex items-center gap-2 bg-slate-950 p-1.5 rounded-2xl border border-slate-800">
+                {[1,2,3].map(d => (
+                  <button key={d} onClick={() => setSelectedDay(d)} className={`px-5 py-2.5 rounded-xl text-[10px] font-black transition-all ${selectedDay === d ? 'bg-indigo-600 text-white shadow-lg' : 'text-slate-600 hover:text-white'}`}>D{d}</button>
+                ))}
               </div>
-              <div className="flex items-center gap-3">
-                 <span className="text-[9px] font-black text-slate-500 uppercase tracking-widest">Active View Session</span>
-                 <div className="flex bg-slate-950 p-1 rounded-xl border border-slate-800">
-                   {[1,2,3,4].map(s => (
-                     <button key={s} onClick={() => setSelectedSession(s)} className={`px-4 py-2 rounded-lg text-[10px] font-black transition-all ${selectedSession === s ? 'bg-white text-slate-950 shadow-lg' : 'text-slate-600 hover:text-white'}`}>S{s}</button>
-                   ))}
-                 </div>
+              <div className="flex bg-slate-950 p-1.5 rounded-2xl border border-slate-800">
+                {[1,2,3,4].map(s => (
+                  <button key={s} onClick={() => setSelectedSession(s)} className={`px-5 py-2.5 rounded-xl text-[10px] font-black transition-all ${selectedSession === s ? 'bg-white text-slate-950 shadow-lg' : 'text-slate-600 hover:text-white'}`}>S{s}</button>
+                ))}
               </div>
+              
               <div className="flex flex-col items-end border-l border-slate-800 pl-8">
-                <span className="text-[9px] font-black text-slate-500 uppercase">Verified Units Online</span>
+                <span className="text-[9px] font-black text-slate-500 uppercase tracking-widest">Verified Units</span>
                 <div className="flex items-baseline gap-1">
-                  <span className="text-2xl font-black text-indigo-500 leading-none">{verifiedCount}</span>
-                  <span className="text-[10px] font-black text-slate-600">/ {members.length}</span>
+                  <span className="text-2xl font-black text-emerald-500 leading-none">{stats.verified}</span>
+                  <span className="text-[10px] font-black text-slate-600">/ {stats.members.length}</span>
                 </div>
               </div>
            </div>
         </div>
 
-        {/* TAB VIEWPORT */}
         <div className="flex-1 relative overflow-hidden">
-           {activeTab === 'map' && <MapTracker members={members} activeSessionKey={sessionKey} />}
+           {activeTab === 'map' && <MapTracker members={stats.members} activeSessionKey={sessionKey} />}
            {activeTab === 'sheet' && <AttendanceSheet users={users} workUpdates={workUpdates} equipments={equipments} forcedDay={selectedDay} forcedSession={selectedSession} />}
            {activeTab === 'inventory' && <div className="p-10 h-full overflow-auto custom-scrollbar"><EquipmentManager equipments={equipments} users={users} onUpdate={onUpdateEquipment} onRegister={onRegisterEquipment} isAdmin={true} /></div>}
-           {activeTab === 'chat' && <ChatSystem messages={messages} onSendMessage={onSendMessage} currentUserId={adminId} targets={members} />}
+           {activeTab === 'chat' && <ChatSystem messages={messages} onSendMessage={onSendMessage} currentUserId={adminId} targets={stats.members} />}
         </div>
       </section>
     </div>
