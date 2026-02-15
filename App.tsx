@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import Gun from 'gun';
 import { Role, User, Equipment, ChatMessage, LocationPoint, WorkUpdate, Geofence } from './types';
 import { INITIAL_USERS, INITIAL_EQUIPMENT } from './data';
@@ -13,210 +13,152 @@ const GEOFENCE: Geofence = {
   name: "Event Zone A"
 };
 
-// Initialize Gun with public relay peers for cross-device sync
+// PRODUCTION PEERS: More reliable and distributed nodes
 const gun = Gun({
   peers: [
+    'https://relay.gun.one/gun',
     'https://gun-manhattan.herokuapp.com/gun',
-    'https://gun-us.herokuapp.com/gun'
+    'https://peer.wall.org/gun'
   ]
 });
+
+const APP_KEY = 'bcs-media-v12-production';
 
 const App: React.FC = () => {
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [trackingActive, setTrackingActive] = useState(false);
-  const [syncStatus, setSyncStatus] = useState<'IDLE' | 'SYNCING' | 'CONNECTED'>('IDLE');
+  const [networkHealth, setNetworkHealth] = useState({ peers: 0, latency: 0 });
 
-  // State Mirror
+  // Use a map for O(1) lookups during high-frequency sync
   const [users, setUsers] = useState<User[]>(INITIAL_USERS);
   const [equipments, setEquipments] = useState<Equipment[]>(INITIAL_EQUIPMENT);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [workUpdates, setWorkUpdates] = useState<WorkUpdate[]>([]);
 
-  // 1. Initialize Gun Listeners
+  // Monitor network health
   useEffect(() => {
-    setSyncStatus('SYNCING');
-    
-    // Sync Users (Attendance & Location)
-    const userMap = gun.get('bcs-media-v4-users');
-    userMap.map().on((data: any, id: string) => {
+    const check = setInterval(() => {
+      const peers = (gun as any)._?.opt?.peers || {};
+      const active = Object.values(peers).filter((p: any) => p?.wire?.readyState === 1).length;
+      setNetworkHealth(h => ({ ...h, peers: active }));
+    }, 5000);
+    return () => clearInterval(check);
+  }, []);
+
+  // MASTER SYNC ENGINE
+  useEffect(() => {
+    // 1. Listen for Attendance (Granular)
+    gun.get(`${APP_KEY}-attendance`).map().on((data: string, userId: string) => {
       if (!data) return;
       setUsers(prev => prev.map(u => {
-        if (u.id === id) {
-          const attendance = data.attendance ? JSON.parse(data.attendance) : u.attendance;
-          const currentLocation = data.location ? JSON.parse(data.location) : u.currentLocation;
-          return {
-            ...u,
-            attendance,
-            currentLocation,
-            status: data.status || u.status,
-            isInsideGeofence: currentLocation ? checkGeofence(currentLocation) : u.isInsideGeofence
-          };
+        if (u.id === userId) {
+          try {
+            const list = JSON.parse(data);
+            return { ...u, attendance: Array.isArray(list) ? list : u.attendance };
+          } catch (e) { return u; }
         }
         return u;
       }));
     });
 
-    // Sync Messages
-    gun.get('bcs-media-v4-messages').map().on((data: any) => {
+    // 2. Listen for Locations (Granular & Atomic)
+    gun.get(`${APP_KEY}-locations`).map().on((data: string, userId: string) => {
       if (!data) return;
+      setUsers(prev => prev.map(u => {
+        if (u.id === userId) {
+          try {
+            const loc = JSON.parse(data);
+            return { 
+              ...u, 
+              currentLocation: loc, 
+              status: 'Online',
+              isInsideGeofence: Math.abs(loc.lat - GEOFENCE.center.lat) <= GEOFENCE.radiusLat &&
+                               Math.abs(loc.lng - GEOFENCE.center.lng) <= GEOFENCE.radiusLng
+            };
+          } catch (e) { return u; }
+        }
+        return u;
+      }));
+    });
+
+    // 3. Listen for Messages
+    gun.get(`${APP_KEY}-chat`).map().on((data: any) => {
+      if (!data || !data.id) return;
       setMessages(prev => {
-        if (prev.find(m => m.id === data.id)) return prev;
+        if (prev.some(m => m.id === data.id)) return prev;
         return [...prev, data].sort((a, b) => a.timestamp - b.timestamp);
       });
     });
 
-    // Sync Work Updates
-    gun.get('bcs-media-v4-work').map().on((data: any) => {
-      if (!data) return;
+    // 4. Listen for Work Updates
+    gun.get(`${APP_KEY}-work`).map().on((data: any) => {
+      if (!data || !data.id) return;
       setWorkUpdates(prev => {
-        if (prev.find(w => w.id === data.id)) return prev;
+        if (prev.some(w => w.id === data.id)) return prev;
         return [data, ...prev].sort((a, b) => b.timestamp - a.timestamp);
       });
     });
-
-    // Sync Equipment
-    gun.get('bcs-media-v4-gear').map().on((data: any) => {
-      if (!data) return;
-      setEquipments(prev => {
-        const exists = prev.find(e => e.id === data.id);
-        if (exists) return prev.map(e => e.id === data.id ? data : e);
-        return [...prev, data];
-      });
-    });
-
-    setSyncStatus('CONNECTED');
   }, []);
 
-  const checkGeofence = (point: LocationPoint): boolean => {
-    return (
-      Math.abs(point.lat - GEOFENCE.center.lat) <= GEOFENCE.radiusLat &&
-      Math.abs(point.lng - GEOFENCE.center.lng) <= GEOFENCE.radiusLng
-    );
-  };
-
   const handleUpdateLocation = (userId: string, lat: number, lng: number) => {
-    const newPoint: LocationPoint = { lat, lng, timestamp: Date.now() };
-    // Update local state immediately for responsiveness
-    setUsers(prev => prev.map(u => u.id === userId ? { ...u, currentLocation: newPoint, status: 'Online' } : u));
-    
-    // Broadcast to Mesh
-    gun.get('bcs-media-v4-users').get(userId).put({
-      location: JSON.stringify(newPoint),
-      status: 'Online'
-    });
+    const point = { lat, lng, timestamp: Date.now() };
+    // Atomic put to specialized location node
+    gun.get(`${APP_KEY}-locations`).get(userId).put(JSON.stringify(point));
   };
 
   const markAttendance = (userId: string, day: number, session: number) => {
-    const sessionKey = `D${day}S${session}`;
-    const userRef = users.find(u => u.id === userId);
-    if (!userRef) return;
-
-    if (!userRef.attendance.includes(sessionKey)) {
-      const newAttendance = [...userRef.attendance, sessionKey];
-      // Broadcast to Mesh
-      gun.get('bcs-media-v4-users').get(userId).put({
-        attendance: JSON.stringify(newAttendance)
-      });
+    const key = `D${day}S${session}`;
+    const user = users.find(u => u.id === userId);
+    if (user && !user.attendance.includes(key)) {
+      const newList = [...user.attendance, key];
+      gun.get(`${APP_KEY}-attendance`).get(userId).put(JSON.stringify(newList));
     }
   };
 
   const sendChatMessage = (senderId: string, receiverId: string, text: string) => {
-    const id = Math.random().toString(36).substr(2, 9);
-    const newMessage: ChatMessage = {
-      id,
-      senderId,
-      receiverId,
-      text,
-      timestamp: Date.now(),
-      isRead: false
-    };
-    // Broadcast to Mesh
-    gun.get('bcs-media-v4-messages').get(id).put(newMessage);
+    const id = `m-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`;
+    const msg: ChatMessage = { id, senderId, receiverId, text, timestamp: Date.now(), isRead: false };
+    gun.get(`${APP_KEY}-chat`).get(id).put(msg);
   };
 
   const addWorkUpdate = (userId: string, task: string) => {
-    const id = Math.random().toString(36).substr(2, 9);
-    const update: WorkUpdate = {
-      id,
-      userId,
-      task,
-      timestamp: Date.now()
-    };
-    // Broadcast to Mesh
-    gun.get('bcs-media-v4-work').get(id).put(update);
-  };
-
-  const updateEquipment = (eq: Equipment) => {
-    gun.get('bcs-media-v4-gear').get(eq.id).put(eq);
-  };
-
-  const registerEquipment = (name: string, sn: string, memberId: string) => {
-    const id = `eq-${Date.now()}`;
-    const newEq: Equipment = {
-      id,
-      name,
-      serialNumber: sn,
-      assignedToId: memberId,
-      status: 'Good',
-      lastUpdated: new Date().toISOString()
-    };
-    gun.get('bcs-media-v4-gear').get(id).put(newEq);
-  };
-
-  const handleLogin = (user: User) => {
-    const latestUser = users.find(u => u.id === user.id) || user;
-    setCurrentUser(latestUser);
-    setIsLoggedIn(true);
-    // Mark online in mesh
-    gun.get('bcs-media-v4-users').get(user.id).put({ status: 'Online' });
-  };
-
-  const handleLogout = () => {
-    if (currentUser) {
-      gun.get('bcs-media-v4-users').get(currentUser.id).put({ status: 'Offline' });
-    }
-    setIsLoggedIn(false);
-    setCurrentUser(null);
-    setTrackingActive(false);
+    const id = `w-${Date.now()}`;
+    const update = { id, userId, task, timestamp: Date.now() };
+    gun.get(`${APP_KEY}-work`).get(id).put(update);
   };
 
   if (!isLoggedIn || !currentUser) {
-    return <Login users={users} onLogin={handleLogin} />;
+    return <Login users={users} onLogin={(u) => { setCurrentUser(u); setIsLoggedIn(true); }} />;
   }
 
   return (
-    <div className="min-h-screen flex flex-col">
-      <div className="bg-slate-900 text-white p-2 text-xs flex justify-between items-center px-6 z-50 border-b border-slate-800">
+    <div className="min-h-screen flex flex-col bg-slate-950 text-slate-200">
+      {/* Network HUD */}
+      <div className="bg-slate-900 border-b border-slate-800 px-6 py-1.5 flex justify-between items-center text-[9px] font-black tracking-widest uppercase">
         <div className="flex items-center gap-4">
           <div className="flex items-center gap-2">
-            <div className={`w-2 h-2 rounded-full ${syncStatus === 'CONNECTED' ? 'bg-emerald-500 shadow-[0_0_8px_#10b981]' : 'bg-amber-500'}`}></div>
-            <span className="font-mono uppercase tracking-tighter text-[10px]">
-              {syncStatus === 'CONNECTED' ? 'CLOUD_SYNC: ACTIVE' : 'CLOUD_SYNC: LINKING...'}
-            </span>
+            <div className={`w-1.5 h-1.5 rounded-full ${networkHealth.peers > 0 ? 'bg-emerald-500 shadow-[0_0_8px_#10b981] animate-pulse' : 'bg-red-600'}`}></div>
+            <span>Network: {networkHealth.peers > 0 ? `LINKED [${networkHealth.peers} NODES]` : 'SEARCHING...'}</span>
           </div>
           <span className="text-slate-700">|</span>
-          <span>Personnel: <strong>{currentUser.name}</strong></span>
+          <span className="text-indigo-400">Personnel: {currentUser.name}</span>
         </div>
-        <div className="flex items-center gap-4">
-          <button 
-            onClick={handleLogout}
-            className="bg-slate-800 hover:bg-red-600 px-3 py-1 rounded font-medium transition-colors border border-slate-700 text-[10px] uppercase font-black"
-          >
-            Disconnect
-          </button>
-        </div>
+        <button onClick={() => { setIsLoggedIn(false); setCurrentUser(null); }} className="hover:text-red-500 transition-colors">Terminate Link</button>
       </div>
 
-      <main className="flex-1 overflow-auto bg-slate-950">
+      <main className="flex-1 overflow-hidden">
         {currentUser.role === Role.ADMIN ? (
           <AdminDashboard 
             users={users} 
             equipments={equipments}
             messages={messages}
             workUpdates={workUpdates}
-            onUpdateEquipment={updateEquipment}
-            onRegisterEquipment={registerEquipment}
+            onUpdateEquipment={(eq) => gun.get(`${APP_KEY}-gear`).get(eq.id).put(eq)}
+            onRegisterEquipment={(n, s, m) => {
+              const id = `eq-${Date.now()}`;
+              gun.get(`${APP_KEY}-gear`).get(id).put({ id, name: n, serialNumber: s, assignedToId: m, status: 'Good', lastUpdated: new Date().toISOString() });
+            }}
             onSendMessage={sendChatMessage}
             adminId={currentUser.id}
           />
@@ -226,12 +168,12 @@ const App: React.FC = () => {
             allUsers={users}
             equipments={equipments.filter(e => e.assignedToId === currentUser.id)}
             messages={messages}
-            onMarkAttendance={(day, session) => markAttendance(currentUser.id, day, session)}
+            onMarkAttendance={(d, s) => markAttendance(currentUser.id, d, s)}
             onToggleTracking={() => setTrackingActive(!trackingActive)}
             onUpdateLocation={(lat, lng) => handleUpdateLocation(currentUser.id, lat, lng)}
             isTracking={trackingActive}
-            onSendMessage={(text) => sendChatMessage(currentUser.id, 'admin-1', text)}
-            onAddWorkUpdate={(task) => addWorkUpdate(currentUser.id, task)}
+            onSendMessage={(t) => sendChatMessage(currentUser.id, 'admin-1', t)}
+            onAddWorkUpdate={(t) => addWorkUpdate(currentUser.id, t)}
           />
         )}
       </main>
