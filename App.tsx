@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
-import Gun from 'gun';
+
+import React, { useState, useEffect } from 'react';
 import { Role, User, Equipment, ChatMessage, LocationPoint, WorkUpdate, Geofence } from './types';
 import { INITIAL_USERS, INITIAL_EQUIPMENT } from './data';
 import AdminDashboard from './components/AdminDashboard';
@@ -13,194 +13,190 @@ const GEOFENCE: Geofence = {
   name: "Event Zone A"
 };
 
-const gun = Gun({
-  peers: [
-    'https://gun-manhattan.herokuapp.com/gun',
-    'https://relay.gun.one/gun',
-    'https://gundb-relay.herokuapp.com/gun',
-    'https://gun-us.herokuapp.com/gun'
-  ],
-  localStorage: false 
-});
-
-const MESH_NS = 'bcs-v19-ultra-mesh';
-
 const App: React.FC = () => {
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [currentUser, setCurrentUser] = useState<User | null>(null);
-  const [trackingActive, setTrackingActive] = useState(false);
-  const [peers, setPeers] = useState<string[]>([]);
   const [users, setUsers] = useState<User[]>(INITIAL_USERS);
   const [equipments, setEquipments] = useState<Equipment[]>(INITIAL_EQUIPMENT);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [workUpdates, setWorkUpdates] = useState<WorkUpdate[]>([]);
-  const [lastPacket, setLastPacket] = useState(0);
+  const [trackingActive, setTrackingActive] = useState(false);
 
-  // HIGH-PERFORMANCE BUFFERING REFS
-  const userStateRef = useRef<User[]>(INITIAL_USERS);
-  const syncTimerRef = useRef<number | null>(null);
+  const checkGeofence = (point: LocationPoint): boolean => {
+    return (
+      Math.abs(point.lat - GEOFENCE.center.lat) <= GEOFENCE.radiusLat &&
+      Math.abs(point.lng - GEOFENCE.center.lng) <= GEOFENCE.radiusLng
+    );
+  };
 
-  // MONITOR NETWORK
-  useEffect(() => {
-    const timer = setInterval(() => {
-      const p = (gun as any)._?.opt?.peers || {};
-      const active = Object.keys(p).filter(key => p[key]?.wire?.readyState === 1);
-      setPeers(active);
-    }, 5000);
-    return () => clearInterval(timer);
-  }, []);
-
-  // START SYNC ENGINE
-  useEffect(() => {
-    const db: any = gun.get(MESH_NS);
-
-    // BUFFERED FLUSH FUNCTION
-    // Instead of re-rendering for every packet, we batch updates every 800ms
-    const scheduleFlush = () => {
-      if (syncTimerRef.current) return;
-      syncTimerRef.current = window.setTimeout(() => {
-        setUsers([...userStateRef.current]);
-        syncTimerRef.current = null;
-      }, 800);
-    };
-
-    // 1. ATTENDANCE LISTENER
-    db.get('att_v19').map().on((val: number, flatKey: string) => {
-      if (!val) return;
-      setLastPacket(Date.now());
-      const [_, userId, sessionKey] = flatKey.split('_');
-      
-      const idx = userStateRef.current.findIndex(u => u.id === userId);
-      if (idx !== -1) {
-        if (!userStateRef.current[idx].attendance.includes(sessionKey)) {
-          userStateRef.current[idx] = { 
-            ...userStateRef.current[idx], 
-            attendance: [...userStateRef.current[idx].attendance, sessionKey] 
-          };
-          scheduleFlush();
-        }
-      }
-    });
-
-    // 2. SIGNAL/LOCATION LISTENER
-    db.get('sig_v19').map().on((data: string, userId: string) => {
-      if (!data) return;
-      setLastPacket(Date.now());
-      try {
-        const sig = JSON.parse(data);
-        const idx = userStateRef.current.findIndex(u => u.id === userId);
-        if (idx !== -1) {
-          const isOnline = Date.now() - sig.time < 35000;
-          const inside = Math.abs(sig.lat - GEOFENCE.center.lat) <= GEOFENCE.radiusLat &&
-                         Math.abs(sig.lng - GEOFENCE.center.lng) <= GEOFENCE.radiusLng;
-          
-          userStateRef.current[idx] = {
-            ...userStateRef.current[idx],
-            currentLocation: { lat: sig.lat, lng: sig.lng, timestamp: sig.time },
-            status: isOnline ? 'Online' : 'Offline',
-            isInsideGeofence: inside
-          };
-          scheduleFlush();
-        }
-      } catch (e) {}
-    });
-
-    // 3. COMMS (Instant delivery)
-    db.get('msg_v19').map().on((msg: any) => {
-      if (!msg?.id) return;
-      setMessages(prev => prev.some(m => m.id === msg.id) ? prev : [...prev, msg].sort((a,b) => a.timestamp - b.timestamp));
-    });
-
-  }, []);
-
-  // SELF SIGNAL
-  useEffect(() => {
-    if (isLoggedIn && currentUser) {
-      const hb = setInterval(() => {
-        const loc = currentUser.currentLocation;
-        const data = { 
-          lat: loc?.lat || 0, 
-          lng: loc?.lng || 0, 
-          time: Date.now() 
+  const handleUpdateLocation = (userId: string, lat: number, lng: number) => {
+    const newPoint: LocationPoint = { lat, lng, timestamp: Date.now() };
+    setUsers(prev => prev.map(u => {
+      if (u.id === userId) {
+        return {
+          ...u,
+          status: 'Online',
+          currentLocation: newPoint,
+          isInsideGeofence: checkGeofence(newPoint),
+          locationHistory: [...(u.locationHistory || []), newPoint].slice(-20)
         };
-        gun.get(MESH_NS).get('sig_v19').get(currentUser.id).put(JSON.stringify(data));
-      }, 12000);
-      return () => clearInterval(hb);
+      }
+      return u;
+    }));
+  };
+
+  // Telemetry Simulation Fix: Ensure Online status is set for map visibility
+  useEffect(() => {
+    let interval: any;
+    if (trackingActive) {
+      interval = setInterval(() => {
+        setUsers(prevUsers => prevUsers.map(u => {
+          if (u.id !== currentUser?.id) {
+            const offset = 0.006;
+            const simulatedPoint: LocationPoint = {
+              lat: GEOFENCE.center.lat + (Math.random() - 0.5) * offset,
+              lng: GEOFENCE.center.lng + (Math.random() - 0.5) * offset,
+              timestamp: Date.now()
+            };
+            // Map visibility requirement: Status must be 'Online'
+            return {
+              ...u,
+              status: 'Online', 
+              currentLocation: simulatedPoint,
+              isInsideGeofence: checkGeofence(simulatedPoint),
+              locationHistory: [...(u.locationHistory || []), simulatedPoint].slice(-15)
+            };
+          }
+          return u;
+        }));
+      }, 5000);
+    } else {
+      setUsers(prevUsers => prevUsers.map(u => {
+        if (u.id !== currentUser?.id) {
+          return { ...u, status: 'Offline' };
+        }
+        return u;
+      }));
     }
-  }, [isLoggedIn, currentUser]);
+    return () => clearInterval(interval);
+  }, [trackingActive, currentUser?.id]);
 
-  const handleUpdateLocation = useCallback((lat: number, lng: number) => {
-    if (!currentUser) return;
-    const data = { lat, lng, time: Date.now() };
-    gun.get(MESH_NS).get('sig_v19').get(currentUser.id).put(JSON.stringify(data));
-  }, [currentUser]);
+  const handleLogin = (user: User) => {
+    setCurrentUser(user);
+    setIsLoggedIn(true);
+    if (user.role === Role.ADMIN) setTrackingActive(true);
+  };
 
-  const markAttendance = useCallback((day: number, session: number) => {
-    if (!currentUser) return;
+  const handleLogout = () => {
+    setIsLoggedIn(false);
+    setCurrentUser(null);
+    setTrackingActive(false);
+  };
+
+  const markAttendance = (userId: string, day: number, session: number) => {
     const sessionKey = `D${day}S${session}`;
-    const flatKey = `att_${currentUser.id}_${sessionKey}`;
-    gun.get(MESH_NS).get('att_v19').get(flatKey).put(Date.now());
-  }, [currentUser]);
+    setUsers(prev => prev.map(u => 
+      u.id === userId && !u.attendance.includes(sessionKey)
+        ? { ...u, attendance: [...u.attendance, sessionKey] }
+        : u
+    ));
+  };
+
+  const updateEquipment = (eq: Equipment) => {
+    setEquipments(prev => prev.map(e => e.id === eq.id ? eq : e));
+  };
+
+  const registerEquipment = (name: string, sn: string, memberId: string) => {
+    const newEq: Equipment = {
+      id: `eq-${Date.now()}`,
+      name,
+      serialNumber: sn,
+      assignedToId: memberId,
+      status: 'Good',
+      lastUpdated: new Date().toISOString()
+    };
+    setEquipments(prev => [...prev, newEq]);
+  };
+
+  const sendChatMessage = (senderId: string, receiverId: string, text: string) => {
+    const newMessage: ChatMessage = {
+      id: Math.random().toString(36).substr(2, 9),
+      senderId,
+      receiverId,
+      text,
+      timestamp: Date.now(),
+      isRead: false
+    };
+    setMessages(prev => [...prev, newMessage]);
+  };
+
+  const addWorkUpdate = (userId: string, task: string) => {
+    const update: WorkUpdate = {
+      id: Math.random().toString(36).substr(2, 9),
+      userId,
+      task,
+      timestamp: Date.now()
+    };
+    setWorkUpdates(prev => [update, ...prev]);
+  };
 
   if (!isLoggedIn || !currentUser) {
-    return <Login users={users} onLogin={(u) => { setCurrentUser(u); setIsLoggedIn(true); }} />;
+    return <Login users={users} onLogin={handleLogin} />;
   }
 
   return (
-    <div className="min-h-screen flex flex-col bg-slate-950 font-sans text-slate-200">
-      <div className="bg-slate-900 border-b border-slate-800 px-6 py-2 flex justify-between items-center text-[8px] font-black uppercase tracking-[0.2em] z-50">
-        <div className="flex items-center gap-6">
+    <div className="min-h-screen flex flex-col">
+      <div className="bg-slate-900 text-white p-2 text-xs flex justify-between items-center px-6 z-50">
+        <div className="flex items-center gap-4">
           <div className="flex items-center gap-2">
-            <div className={`w-1.5 h-1.5 rounded-full ${peers.length > 0 ? 'bg-emerald-500 shadow-[0_0_8px_#10b981]' : 'bg-red-500'}`}></div>
-            <span>{peers.length > 0 ? `MESH_ALIVE [${peers.length}]` : 'OFFLINE'}</span>
+            <div className={`w-2 h-2 rounded-full ${trackingActive ? 'bg-emerald-500 animate-pulse' : 'bg-slate-600'}`}></div>
+            <span className="font-mono uppercase tracking-tighter text-[10px]">Signal: {trackingActive ? 'Syncing' : 'IDLE'}</span>
           </div>
-          <div className="flex items-center gap-2">
-            <div className={`w-1.5 h-1.5 rounded-full ${Date.now() - lastPacket < 3000 ? 'bg-indigo-400 animate-ping' : 'bg-slate-700'}`}></div>
-            <span>TRAFFIC_SIGNAL</span>
-          </div>
+          <span>|</span>
+          <span>Logged in as: <strong>{currentUser.name}</strong></span>
         </div>
         <div className="flex items-center gap-4">
-           <span className="text-slate-500">OP_ID: <span className="text-indigo-400">{currentUser.name}</span></span>
-           <button onClick={() => window.location.reload()} className="text-slate-600 hover:text-white transition-colors">SOFT_RESET</button>
+          {currentUser.role === Role.ADMIN && (
+             <button 
+              onClick={() => setTrackingActive(!trackingActive)}
+              className={`text-[9px] font-black uppercase px-3 py-1 rounded-md transition-all ${trackingActive ? 'bg-emerald-600' : 'bg-slate-700 text-slate-400'}`}
+             >
+               {trackingActive ? 'Pause Simulation' : 'Start Simulation'}
+             </button>
+          )}
+          <button 
+            onClick={handleLogout}
+            className="bg-slate-800 hover:bg-red-600 px-3 py-1 rounded font-medium transition-colors border border-slate-700"
+          >
+            Disconnect
+          </button>
         </div>
       </div>
 
-      <main className="flex-1 overflow-hidden relative">
+      <main className="flex-1 overflow-auto bg-slate-950">
         {currentUser.role === Role.ADMIN ? (
           <AdminDashboard 
             users={users} 
             equipments={equipments}
             messages={messages}
             workUpdates={workUpdates}
-            onUpdateEquipment={(eq) => gun.get(MESH_NS).get('gear').get(eq.id).put(eq)}
-            onRegisterEquipment={(n, s, m) => {
-              const id = `eq-${Date.now()}`;
-              gun.get(MESH_NS).get('gear').get(id).put({ id, name: n, serialNumber: s, assignedToId: m, status: 'Good', lastUpdated: new Date().toISOString() });
-            }}
-            onSendMessage={(s,r,t) => {
-               const id = `m-${Date.now()}`;
-               gun.get(MESH_NS).get('msg_v19').get(id).put({ id, senderId: s, receiverId: r, text: t, timestamp: Date.now(), isRead: false });
-            }}
+            onUpdateEquipment={updateEquipment}
+            onRegisterEquipment={registerEquipment}
+            onSendMessage={sendChatMessage}
             adminId={currentUser.id}
           />
         ) : (
           <MemberPortal 
-            user={users.find(u => u.id === currentUser.id) || currentUser}
+            user={users.find(u => u.id === currentUser.id)!}
             allUsers={users}
             equipments={equipments.filter(e => e.assignedToId === currentUser.id)}
             messages={messages}
-            onMarkAttendance={markAttendance}
+            onMarkAttendance={(day, session) => markAttendance(currentUser.id, day, session)}
             onToggleTracking={() => setTrackingActive(!trackingActive)}
-            onUpdateLocation={handleUpdateLocation}
+            onUpdateLocation={(lat, lng) => handleUpdateLocation(currentUser.id, lat, lng)}
             isTracking={trackingActive}
-            onSendMessage={(t) => {
-               const id = `m-${Date.now()}`;
-               gun.get(MESH_NS).get('msg_v19').get(id).put({ id, senderId: currentUser.id, receiverId: 'admin-1', text: t, timestamp: Date.now(), isRead: false });
-            }}
-            onAddWorkUpdate={(t) => {
-              const id = `w-${Date.now()}`;
-              gun.get(MESH_NS).get('work_v19').get(id).put({ id, userId: currentUser.id, task: t, timestamp: Date.now() });
-            }}
+            onSendMessage={(text) => sendChatMessage(currentUser.id, 'admin-1', text)}
+            onAddWorkUpdate={(task) => addWorkUpdate(currentUser.id, task)}
           />
         )}
       </main>

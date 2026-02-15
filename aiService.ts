@@ -10,64 +10,14 @@ export interface VerificationResult {
   error?: string;
 }
 
-// RATE LIMITER: 15 RPM = 1 request every 4 seconds.
-// We use 4500ms to ensure we stay safely under the limit.
-const REQ_THROTTLE_MS = 4500;
-let lastRequestTime = 0;
-let isProcessing = false;
-
-interface QueueItem {
-  base64Image: string;
-  resolve: (res: VerificationResult) => void;
-  reject: (err: any) => void;
-}
-
-const queue: QueueItem[] = [];
-
-const processQueue = async () => {
-  if (isProcessing || queue.length === 0) return;
-
-  const now = Date.now();
-  const timeSinceLast = now - lastRequestTime;
+export const verifyAttendanceImage = async (base64Image: string): Promise<VerificationResult> => {
+  const apiKey = process.env.API_KEY;
   
-  if (timeSinceLast < REQ_THROTTLE_MS) {
-    setTimeout(processQueue, REQ_THROTTLE_MS - timeSinceLast);
-    return;
+  if (!apiKey || apiKey === "undefined") {
+    throw new Error("API_KEY_MISSING: Please add the API_KEY to your deployment environment variables.");
   }
 
-  isProcessing = true;
-  const item = queue.shift();
-  
-  if (item) {
-    try {
-      lastRequestTime = Date.now();
-      const result = await executeVerification(item.base64Image);
-      item.resolve(result);
-    } catch (err) {
-      item.reject(err);
-    } finally {
-      isProcessing = false;
-      // Trigger next immediately; the throttle at the top will handle the wait
-      processQueue();
-    }
-  }
-};
-
-export const getQueuePosition = () => queue.length;
-
-export const verifyAttendanceImage = (base64Image: string): Promise<VerificationResult> => {
-  return new Promise((resolve, reject) => {
-    queue.push({ base64Image, resolve, reject });
-    processQueue();
-  });
-};
-
-const executeVerification = async (base64Image: string): Promise<VerificationResult> => {
-  if (!process.env.API_KEY || process.env.API_KEY === "undefined") {
-    throw new Error("API_KEY_MISSING");
-  }
-
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  const ai = new GoogleGenAI({ apiKey });
 
   try {
     const response = await ai.models.generateContent({
@@ -81,11 +31,13 @@ const executeVerification = async (base64Image: string): Promise<VerificationRes
             },
           },
           {
-            text: `Extract GPS data from this image. Target: MIT-WPU Campus. 
-            Confirm:
-            1. GPS Coordinates (Lat/Lng) if available.
-            2. Authenticity (Is it a real photo?).
-            Return JSON only.`
+            text: `Act as a high-precision GPS verification unit for MIT-WPU Kothrud campus.
+            Analyze the provided image for:
+            1. GPS Coordinates: Extract numerical Latitude and Longitude from text overlays or EXIF-style data printed on the image.
+            2. Authenticity: Confirm this is a real photo of people/campus, not a photo of another screen or a digital screenshot.
+            3. Context: Confirm the environment looks like a university campus setting.
+            
+            Return ONLY a valid JSON object. No markdown, no commentary.`
           }
         ],
       },
@@ -98,7 +50,8 @@ const executeVerification = async (base64Image: string): Promise<VerificationRes
             longitude: { type: Type.NUMBER },
             isAuthentic: { type: Type.BOOLEAN },
             isCampus: { type: Type.BOOLEAN },
-            confidence: { type: Type.NUMBER }
+            confidence: { type: Type.NUMBER },
+            detectedAddress: { type: Type.STRING }
           },
           required: ["latitude", "longitude", "isAuthentic", "isCampus", "confidence"],
         },
@@ -106,11 +59,14 @@ const executeVerification = async (base64Image: string): Promise<VerificationRes
     });
 
     const text = response.text;
-    if (!text) throw new Error("Verification Timeout");
-    return JSON.parse(text);
+    if (!text) throw new Error("Empty response from AI service.");
+    
+    // Safety: Strip markdown if the model accidentally includes it
+    const cleanJson = text.replace(/```json|```/gi, "").trim();
+    return JSON.parse(cleanJson);
     
   } catch (error: any) {
-    console.error("AI Node Error:", error);
-    throw error;
+    console.error("Gemini Verification Error:", error);
+    throw new Error(error.message || "Failed to analyze image telemetry.");
   }
 };
