@@ -13,18 +13,19 @@ const GEOFENCE: Geofence = {
   name: "Event Zone A"
 };
 
+// V17: ULTRA-SYNC RELAYS
 const gun = Gun({
   peers: [
     'https://gun-manhattan.herokuapp.com/gun',
     'https://relay.gun.one/gun',
-    'https://peer.wall.org/gun',
     'https://gundb-relay.herokuapp.com/gun',
-    'https://gun-us.herokuapp.com/gun'
-  ]
+    'https://gun-us.herokuapp.com/gun',
+    'https://gun-eu.herokuapp.com/gun'
+  ],
+  localStorage: false // FORCE NETWORK SYNC - PREVENTS STALE LOCAL DATA
 });
 
-// UNIQUE VERSIONED NAMESPACE
-const MESH_NS = 'bcs-media-v16-flat';
+const MESH_NS = 'bcs-v17-ultra-mesh';
 
 const App: React.FC = () => {
   const [isLoggedIn, setIsLoggedIn] = useState(false);
@@ -35,28 +36,38 @@ const App: React.FC = () => {
   const [equipments, setEquipments] = useState<Equipment[]>(INITIAL_EQUIPMENT);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [workUpdates, setWorkUpdates] = useState<WorkUpdate[]>([]);
+  const [lastPacketTime, setLastPacketTime] = useState(0);
 
-  // Monitor Peers
+  // Connection Monitor
   useEffect(() => {
     const timer = setInterval(() => {
       const p = (gun as any)._?.opt?.peers || {};
       const active = Object.keys(p).filter(key => p[key]?.wire?.readyState === 1);
       setPeers(active);
-    }, 5000);
+    }, 3000);
     return () => clearInterval(timer);
   }, []);
 
-  // MASTER SYNC - FLAT PATH ARCHITECTURE
+  // MASTER SYNC ENGINE
   useEffect(() => {
-    const db = gun.get(MESH_NS);
+    const db: any = gun.get(MESH_NS);
 
-    // 1. FLAT ATTENDANCE LISTENER
-    // Key format: "attendance_{userId}_{sessionKey}" -> timestamp
-    db.get('attendance_flat').map().on((val: number, flatKey: string) => {
+    // 1. BROADCAST PULSE (Wakes up the mesh)
+    db.get('pulse').map().on((time: number, userId: string) => {
+      setLastPacketTime(Date.now());
+      setUsers(prev => prev.map(u => 
+        u.id === userId ? { ...u, status: Date.now() - time < 15000 ? 'Online' : 'Offline' } : u
+      ));
+    });
+
+    // 2. FLAT ATTENDANCE SYNC
+    db.get('attendance_v17').map().on((val: number, flatKey: string) => {
       if (!val) return;
-      const [_, userId, sessionKey] = flatKey.split('_');
-      if (!userId || !sessionKey) return;
-
+      setLastPacketTime(Date.now());
+      const parts = flatKey.split('_');
+      const userId = parts[1];
+      const sessionKey = parts[2];
+      
       setUsers(prev => prev.map(u => {
         if (u.id === userId && !u.attendance.includes(sessionKey)) {
           return { ...u, attendance: [...u.attendance, sessionKey] };
@@ -65,9 +76,10 @@ const App: React.FC = () => {
       }));
     });
 
-    // 2. FLAT LOCATION LISTENER
-    db.get('locations_flat').map().on((data: string, userId: string) => {
+    // 3. LOCATION TRACKER
+    db.get('geo_v17').map().on((data: string, userId: string) => {
       if (!data) return;
+      setLastPacketTime(Date.now());
       try {
         const loc = JSON.parse(data);
         setUsers(prev => prev.map(u => {
@@ -75,7 +87,6 @@ const App: React.FC = () => {
             return {
               ...u,
               currentLocation: loc,
-              status: 'Online',
               isInsideGeofence: Math.abs(loc.lat - GEOFENCE.center.lat) <= GEOFENCE.radiusLat &&
                                Math.abs(loc.lng - GEOFENCE.center.lng) <= GEOFENCE.radiusLng
             };
@@ -85,36 +96,39 @@ const App: React.FC = () => {
       } catch (e) {}
     });
 
-    // 3. CHAT & WORK LISTENERS (Standard)
-    db.get('chat_v2').map().on((data: any) => {
-      if (!data || !data.id) return;
+    // 4. CHAT & WORK
+    db.get('chat_v17').map().on((data: any) => {
+      if (!data?.id) return;
       setMessages(prev => prev.some(m => m.id === data.id) ? prev : [...prev, data].sort((a,b) => a.timestamp - b.timestamp));
     });
 
-    db.get('work_v2').map().on((data: any) => {
-      if (!data || !data.id) return;
+    db.get('work_v17').map().on((data: any) => {
+      if (!data?.id) return;
       setWorkUpdates(prev => prev.some(w => w.id === data.id) ? prev : [data, ...prev].sort((a,b) => b.timestamp - a.timestamp));
     });
 
   }, []);
 
+  // BROADCAST SELF PULSE
+  useEffect(() => {
+    if (isLoggedIn && currentUser) {
+      const pulse = setInterval(() => {
+        gun.get(MESH_NS).get('pulse').get(currentUser.id).put(Date.now());
+      }, 5000);
+      return () => clearInterval(pulse);
+    }
+  }, [isLoggedIn, currentUser]);
+
   const handleUpdateLocation = useCallback((userId: string, lat: number, lng: number) => {
     const point = { lat, lng, timestamp: Date.now() };
-    gun.get(MESH_NS).get('locations_flat').get(userId).put(JSON.stringify(point));
+    gun.get(MESH_NS).get('geo_v17').get(userId).put(JSON.stringify(point));
   }, []);
 
   const markAttendance = useCallback((userId: string, day: number, session: number) => {
     const sessionKey = `D${day}S${session}`;
-    const flatKey = `attendance_${userId}_${sessionKey}`;
-    // Put directly to flat node for instant mesh propagation
-    gun.get(MESH_NS).get('attendance_flat').get(flatKey).put(Date.now());
+    const flatKey = `att_${userId}_${sessionKey}`;
+    gun.get(MESH_NS).get('attendance_v17').get(flatKey).put(Date.now());
   }, []);
-
-  const sendChatMessage = (senderId: string, receiverId: string, text: string) => {
-    const id = `m-${Date.now()}`;
-    const msg: ChatMessage = { id, senderId, receiverId, text, timestamp: Date.now(), isRead: false };
-    gun.get(MESH_NS).get('chat_v2').get(id).put(msg);
-  };
 
   if (!isLoggedIn || !currentUser) {
     return <Login users={users} onLogin={(u) => { setCurrentUser(u); setIsLoggedIn(true); }} />;
@@ -122,19 +136,21 @@ const App: React.FC = () => {
 
   return (
     <div className="min-h-screen flex flex-col bg-slate-950 font-sans text-slate-200">
-      {/* NETWORK HUD */}
-      <div className="bg-slate-900/80 backdrop-blur-md border-b border-slate-800 px-6 py-1.5 flex justify-between items-center text-[8px] font-black uppercase tracking-[0.2em] z-50">
+      {/* TACTICAL SIGNAL BAR */}
+      <div className="bg-slate-900 border-b border-slate-800 px-6 py-1.5 flex justify-between items-center text-[8px] font-black uppercase tracking-[0.2em] z-50">
         <div className="flex items-center gap-5">
           <div className="flex items-center gap-2">
-            <div className={`w-1.5 h-1.5 rounded-full ${peers.length > 0 ? 'bg-emerald-500 shadow-[0_0_8px_#10b981] animate-pulse' : 'bg-red-500'}`}></div>
-            <span>{peers.length > 0 ? `MESH: STABLE [${peers.length} NODES]` : 'MESH: SEARCHING...'}</span>
+            <div className={`w-1.5 h-1.5 rounded-full ${peers.length > 0 ? 'bg-emerald-500 shadow-[0_0_8px_#10b981]' : 'bg-red-500'}`}></div>
+            <span>{peers.length > 0 ? `LINK_STABLE [${peers.length} PEERS]` : 'LINK_OFFLINE'}</span>
           </div>
-          <span className="text-slate-700">|</span>
-          <span className="text-slate-500">OPERATOR: <span className="text-indigo-400">{currentUser.name}</span></span>
+          <div className="flex items-center gap-2">
+            <div className={`w-1.5 h-1.5 rounded-full ${Date.now() - lastPacketTime < 5000 ? 'bg-indigo-400 animate-ping' : 'bg-slate-700'}`}></div>
+            <span>TRAFFIC_SIGNAL</span>
+          </div>
         </div>
         <div className="flex items-center gap-4">
-          <span className="text-slate-700 hidden md:block">VER: 16.0.4_STABLE</span>
-          <button onClick={() => { setIsLoggedIn(false); setCurrentUser(null); }} className="text-slate-600 hover:text-red-500 transition-colors">TERMINATE_LINK</button>
+           <span className="text-slate-500">OPERATOR: <span className="text-white">{currentUser.name}</span></span>
+           <button onClick={() => { setIsLoggedIn(false); setCurrentUser(null); }} className="text-slate-600 hover:text-red-500">TERMINATE</button>
         </div>
       </div>
 
@@ -150,7 +166,10 @@ const App: React.FC = () => {
               const id = `eq-${Date.now()}`;
               gun.get(MESH_NS).get('gear').get(id).put({ id, name: n, serialNumber: s, assignedToId: m, status: 'Good', lastUpdated: new Date().toISOString() });
             }}
-            onSendMessage={sendChatMessage}
+            onSendMessage={(s,r,t) => {
+               const id = `m-${Date.now()}`;
+               gun.get(MESH_NS).get('chat_v17').get(id).put({ id, senderId: s, receiverId: r, text: t, timestamp: Date.now(), isRead: false });
+            }}
             adminId={currentUser.id}
           />
         ) : (
@@ -163,10 +182,13 @@ const App: React.FC = () => {
             onToggleTracking={() => setTrackingActive(!trackingActive)}
             onUpdateLocation={(lat, lng) => handleUpdateLocation(currentUser.id, lat, lng)}
             isTracking={trackingActive}
-            onSendMessage={(t) => sendChatMessage(currentUser.id, 'admin-1', t)}
+            onSendMessage={(t) => {
+               const id = `m-${Date.now()}`;
+               gun.get(MESH_NS).get('chat_v17').get(id).put({ id, senderId: currentUser.id, receiverId: 'admin-1', text: t, timestamp: Date.now(), isRead: false });
+            }}
             onAddWorkUpdate={(t) => {
               const id = `w-${Date.now()}`;
-              gun.get(MESH_NS).get('work_v2').get(id).put({ id, userId: currentUser.id, task: t, timestamp: Date.now() });
+              gun.get(MESH_NS).get('work_v17').get(id).put({ id, userId: currentUser.id, task: t, timestamp: Date.now() });
             }}
           />
         )}
